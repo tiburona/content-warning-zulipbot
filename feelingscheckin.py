@@ -1,7 +1,6 @@
 import datetime
 from typing import Any
 import pytz
-import time
 import json
 
 RC_TIMEZONE = pytz.timezone('US/Eastern')
@@ -15,7 +14,7 @@ TEXT_REPOSITORY = {
         "subscribe to reminders so you never miss a chance to express your feelings. Use `list-commands` for more "
         "information about what I can do.",
     'stream9am':
-        "Good morning! Feelings Checkin will take place at 3pm in Babbage. I'm Feelings Checkin Bot.Send me a message "
+        "Good morning! Feelings Checkin will take place at 3pm in Babbage. I'm Feelings Checkin Bot. Send me a message "
         "with the word `help` to find out about the things I can do.",
     'subscribers9am':
         "Happy* Thursday! If you have any requests for content warnings, you can submit them today, or you can activate "
@@ -33,6 +32,7 @@ class FeelingsCheckinBot(object):
         return TEXT_REPOSITORY['usage']
 
     def initialize(self, bot_handler: Any) -> None:
+        print(dir(bot_handler))
         self.bot_handler = bot_handler
 
         initialized_data = json.dumps({'attending': [], 'requests': [], 'ids': {},
@@ -66,11 +66,6 @@ class FeelingsCheckinBot(object):
     def put_data(self, cw_data):
         self.bot_handler.storage.put('cw', json.dumps(cw_data))
 
-    def main(self):
-        while True:
-            self.check_time()
-            time.sleep(60)
-
     @property
     def time(self):
         current_time = datetime.datetime.now(pytz.utc)
@@ -80,24 +75,11 @@ class FeelingsCheckinBot(object):
         current_date = (localized_current_time.year, localized_current_time.month, localized_current_time.day)
         return {'time': current_time, 'day': current_day, 'hour': current_hour, 'date': current_date}
 
-    def check_time(self):
-        current_day = self.time['day']
-        current_time = self.time['time']
-        current_hour = self.time['hour']
-        if current_day == 3:
-            if current_hour == 9 and (current_time - self.thurs_am_msg_sent).day > 1:
-                self.initialize_thursday(current_time)
-            if current_hour == 14 and (current_time - self.one_hour_msg_sent).day > 1:
-                self.send_one_hour_notice(current_time)
-            if current_hour == 15 and (current_time - self.fc_starting_msg_sent).day > 1:
-                self.send_fc_starting_message(current_time)
-
-    def initialize_thursday(self, time):
+    def initialize_thursday(self):
         cw_data = self.clear_data()
         self.send_message_to_stream(TEXT_REPOSITORY['stream9am'])
         for user in cw_data['subscribers']['9']:
             self.send_private_message(user, TEXT_REPOSITORY['subscribers9am'])
-        self.thurs_am_msg_sent = time
 
     def clear_data(self):
         cw_data = self.get_data()
@@ -114,27 +96,25 @@ class FeelingsCheckinBot(object):
                 del cw_data['ids'][id]
         return cw_data
 
-    def send_one_hour_notice(self, time):
+    def send_one_hour_notice(self):
         cw_data = self.get_data()
         content = "Feelings Checkin starts in an hour."
         self.send_message_to_stream(content)
         content = "T minus one hour to Feelings Checkin!"
         for user in cw_data['subscribers']['2']:
             self.send_private_message(user, content)
-        self.one_hour_msg_sent = time
 
-    def send_fc_starting_message(self, time):
+    def send_fc_starting_message(self):
         content = "Feelings checkin is starting."
-        self.send_fc_starting_message(time)
+        self.send_fc_starting_message()
         cw_data = self.get_data()
         content += "  These were the topics for which attendees requested content warnings."
         for id in cw_data['attending']:
             cw_data['requests'].extend(cw_data['ids'][id]['requests'])
         for topic in cw_data['requests']:
-            content += "\n{}".format(topic)
+            content += "\n`{}`".format(topic)
         for user in cw_data['subscribers']['3']:
             self.send_private_message(user, content)
-        self.fc_starting_msg_sent = time
 
     def send_message_to_stream(self, content):
         self.bot_handler.send_message({
@@ -160,15 +140,30 @@ class FeelingsCheckinBot(object):
         })
 
     def handle_message(self, message: Any, bot_handler: Any) -> None:
+
         message['content'] = message['content'].strip()
 
         if message['content'] == '':
             bot_handler.send_reply(message, 'No command specified')
             return
 
-        if message['content'].lower == 'start':
+        if message['content'].lower() == 'start':
             self.main()
             bot_handler.send_reply(message, 'starting Feelings Checkin bot')
+            return
+
+        if message['content'].lower() == '9am':
+            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+                self.initialize_thursday()
+            return
+
+        if message['content'].lower() == '2pm':
+            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+                self.send_one_hour_notice()
+
+        if message['content'].lower() == '3pm':
+            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+                self.send_fc_starting_message()
 
         if message['content'].lower() == 'help':
             bot_handler.send_reply(message, self.usage())
@@ -181,7 +176,6 @@ class FeelingsCheckinBot(object):
             bot_handler.send_reply(message, response)
             return
 
-        print(message)
         response = self.generate_response(message['content'], message['sender_email'])
         self.bot_handler.send_reply(message, response)
 
@@ -220,8 +214,8 @@ class FeelingsCheckinBot(object):
         except IndexError:
             return "Looks like you didn't give me enough arguments."
 
-        else:
-            pass
+        except Exception as e:
+            print(e)
 
         return "I don't know what you mean. Type `list-commands` to find out about the words I understand."
 
@@ -237,14 +231,14 @@ class FeelingsCheckinBot(object):
 
     def add_to_cw_reqs(self, id, cw_reqs, date):
         if id not in self.data['ids']:
-            return "I don't know {}".format(id)
+            return "I don't know `{}`".format(id)
         if id == 'feelings-checkin-bot':
             if not self.before_fc_on_Thursday:
                 return TEXT_REPOSITORY['wrong_time']
+            cw_reqs = self.process_cw_reqs(cw_reqs)
             self.data['requests'].extend(cw_reqs)
             return_string = "The following topics were added to today's content warnings: {}".format(
                 ', '.join(cw_reqs))
-            print(self.data['requests'])
         else:
             cw_reqs = self.process_cw_reqs(cw_reqs)
             self.data['ids'][id]['requests'] = cw_reqs
@@ -254,19 +248,7 @@ class FeelingsCheckinBot(object):
         return return_string
 
     def process_cw_reqs(self, raw_request):
-        cws = []
-        cw_req = []
-        for i, word in enumerate(raw_request):
-            if (i and word == '-r'):
-                cw_string = ' '.join(cw_req)
-                cws.append(cw_string)
-                cw_req = []
-            else:
-                if word != '-r':
-                    cw_req.append(word)
-        cw_string = ' '.join(cw_req)
-        cws.append(cw_string)
-        return cws
+        return [req.strip() for req in ' '.join(raw_request).split('-r ')[1:]]
 
     @property
     def before_fc_on_Thursday(self):
