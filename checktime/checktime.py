@@ -1,8 +1,8 @@
 import datetime
 import pytz
 import zulip
-from .private_vars import zulip_api_key
-from .private_vars import zulip_username
+from private_vars import zulip_api_key
+from private_vars import zulip_username
 
 RC_TIMEZONE = pytz.timezone('US/Eastern')
 
@@ -29,6 +29,7 @@ def send_message(to, message):
 def main():
     hour, day = check_time()
     to = "feelings-checkin-bot@recurse.zulipchat.com"
+    send_message(to, '9am')
     if day == 3:
         if hour == 9:
             send_message(to, '9am')

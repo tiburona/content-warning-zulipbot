@@ -21,8 +21,30 @@ TEXT_REPOSITORY = {
         "any requests associated with an ID by marking yourself as attending Feelings Checkin.\n\n*or disappointed or "
         "enraged or ambivalent -- all feelings about and on Thursdays are valid!",
     'wrong_time':
-        "You can only do that between 9am and 3pm on Thursdays. Type `help` for more information."
+        "You can only do that between 9am and 3pm on Thursdays. Type `help` for more information.",
+    'unrecognized':
+        "I don't know what you mean. Type `list-commands` to find out about the words I understand.",
+    'commands': [
+        'help',
+        'list-commands',
+        'make-id <id> ',
+        'cw-request [options] -r <topic1> [-r <topic2> ...]\n\toptions: -id <id>',
+        'subscribe [9] [2] [3]',
+        'unsubscribe [9] [2] [3]',
+        'will-attend <id>',
+        'will-not-attend <id>'],
+    'descriptions': [
+        "Display bot info",
+        "Display the list of available commands", "Make a new ID",
+        "Request content warnings (if called with -id, will overwrite previous requests for that id).",
+        "Subscribe to FC reminders (all reminders by default, or a subset with opt. args.)\n\t9: "
+        "the 9am reminder\n\t2: the 2pm reminder\n\t3: the 3pm "
+        "reminder and content warning request report",
+        "Unsubscribe from FC reminders (all reminders by default, or a subset with opt. args.)",
+        "Mark an ID as attending",
+        "Mark an ID as not attending (only necessary if you previously marked the ID attending)"]
 }
+
 
 def date_tup_to_obj(date_tup):
     return datetime.date(*date_tup)
@@ -32,32 +54,18 @@ class FeelingsCheckinBot(object):
         return TEXT_REPOSITORY['usage']
 
     def initialize(self, bot_handler: Any) -> None:
-        print(dir(bot_handler))
         self.bot_handler = bot_handler
 
-        initialized_data = json.dumps({'attending': [], 'requests': [], 'ids': {},
-                                       'subscriptions': {'9': [], '2': [], '3':[]}})
+        try:
+            self.bot_handler.storage.get('cw')
+        except:
+            initialized_data = json.dumps({'attending': [], 'requests': [], 'ids': {'feelings-checkin-bot': None},
+                                           'subscriptions': {'9': [], '2': [], '3': []}})
+            self.bot_handler.storage.put('cw', initialized_data)
 
-        self.bot_handler.storage.put('cw', initialized_data)
+        self.commands = TEXT_REPOSITORY['commands']
 
-        self.commands = ['help',
-                         'list-commands',
-                         'make-id <id> ',
-                         'cw-request [options] -r <topic1> [-r <topic2> ...]\n\toptions: -id <id>',
-                         'subscribe [9] [2] [3]',
-                         'unsubscribe [9] [2] [3]',
-                         'will-attend <id>',
-                         'will-not-attend <id>']
-
-        self.descriptions = ["Display bot info",
-                             "Display the list of available commands","Make a new ID",
-                             "Request content warnings (if called with -id, will overwrite previous requests for that id).",
-                             "Subscribe to FC reminders (all reminders by default, or a subset with opt. args.)\n\t9: "
-                             "the 9am reminder\n\t2: the 2pm reminder\n\t3: the 3pm "
-                                             "reminder and content warning request report",
-                             "Unsubscribe from FC reminders (all reminders by default, or a subset with opt. args.)",
-                             "Mark an ID as attending",
-                             "Mark an ID as not attending (only necessary if you previously marked the ID attending)"]
+        self.descriptions = TEXT_REPOSITORY['descriptions']
 
     def get_data(self):
         self.data = json.loads(self.bot_handler.storage.get('cw'))
@@ -78,22 +86,31 @@ class FeelingsCheckinBot(object):
     def initialize_thursday(self):
         cw_data = self.clear_data()
         self.send_message_to_stream(TEXT_REPOSITORY['stream9am'])
-        for user in cw_data['subscribers']['9']:
+        for user in cw_data['subscriptions']['9']:
             self.send_private_message(user, TEXT_REPOSITORY['subscribers9am'])
 
     def clear_data(self):
         cw_data = self.get_data()
         cw_data['attending'] = []
         cw_data['requests'] = []
-        cw_data = self.clean_old_ids(cw_data, datetime.date(self.time['time']))
+        cw_data = self.clean_old_ids(cw_data, datetime.date(*self.time['date']))
         self.put_data(cw_data)
         return cw_data
 
     def clean_old_ids(self, cw_data, current_date):
+        """
+        Parameters:
+        -----------
+        cw_data: dictionary
+            Current value of data object for this bot.
+        current_date: Datetime object
+            Current date
+        """
         for id in cw_data['ids']:
-            last_accessed = date_tup_to_obj(cw_data['ids'][id]['last_accessed'])
-            if (current_date - last_accessed).month > 3:
-                del cw_data['ids'][id]
+            if id != 'feelings-checkin-bot':
+                last_accessed = date_tup_to_obj(cw_data['ids'][id]['last_accessed'])
+                if (current_date - last_accessed) > datetime.timedelta(90):
+                    del cw_data['ids'][id]
         return cw_data
 
     def send_one_hour_notice(self):
@@ -101,26 +118,38 @@ class FeelingsCheckinBot(object):
         content = "Feelings Checkin starts in an hour."
         self.send_message_to_stream(content)
         content = "T minus one hour to Feelings Checkin!"
-        for user in cw_data['subscribers']['2']:
+        for user in cw_data['subscriptions']['2']:
             self.send_private_message(user, content)
 
     def send_fc_starting_message(self):
         content = "Feelings checkin is starting."
-        self.send_fc_starting_message()
+        self.send_message_to_stream(content)
         cw_data = self.get_data()
         content += "  These were the topics for which attendees requested content warnings."
         for id in cw_data['attending']:
             cw_data['requests'].extend(cw_data['ids'][id]['requests'])
         for topic in cw_data['requests']:
             content += "\n`{}`".format(topic)
-        for user in cw_data['subscribers']['3']:
+        for user in cw_data['subscriptions']['3']:
             self.send_private_message(user, content)
 
     def send_message_to_stream(self, content):
+        """
+        Parameters:
+        -----------
+        content: string
+            Body of message.
+        """
+        # self.bot_handler.send_message({
+        #     "type": "stream",
+        #     "to": '455 Broadway',
+        #     "subject": "Feelings Checkin",
+        #     "content": content
+        # })
         self.bot_handler.send_message({
             "type": "stream",
-            "to": '455 Broadway',
-            "subject": "Feelings Checkin",
+            "to": "bot test",
+            "subject": "hello",
             "content": content
         })
 
@@ -133,7 +162,7 @@ class FeelingsCheckinBot(object):
         content: string
             Body of message.
         """
-        self.send_message({
+        self.bot_handler.send_message({
             "type": "private",
             "to": to,
             "content": content
@@ -147,23 +176,26 @@ class FeelingsCheckinBot(object):
             bot_handler.send_reply(message, 'No command specified')
             return
 
-        if message['content'].lower() == 'start':
-            self.main()
-            bot_handler.send_reply(message, 'starting Feelings Checkin bot')
-            return
-
         if message['content'].lower() == '9am':
-            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+            if message['sender_email'] in ['content-warning-bot@recurse.zulipchat.com', 'foo_sender@zulip.com',
+                                           'tiburona@gmail.com']:
                 self.initialize_thursday()
-            return
+            else:
+                return TEXT_REPOSITORY['unrecognized']
 
         if message['content'].lower() == '2pm':
-            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+            if message['sender_email'] in ['content-warning-bot@recurse.zulipchat.com', 'foo_sender@zulip.com',
+                                           'tiburona@gmail.com']:
                 self.send_one_hour_notice()
+            else:
+                return TEXT_REPOSITORY['unrecognized']
 
         if message['content'].lower() == '3pm':
-            if message['sender_email'] == 'content-warning-bot@recurse.zulipchat.com':
+            if message['sender_email'] in ['content-warning-bot@recurse.zulipchat.com', 'foo_sender@zulip.com',
+                                           'tiburona@gmail.com']:
                 self.send_fc_starting_message()
+            else:
+                return TEXT_REPOSITORY['unrecognized']
 
         if message['content'].lower() == 'help':
             bot_handler.send_reply(message, self.usage())
@@ -186,6 +218,10 @@ class FeelingsCheckinBot(object):
 
         try:
 
+            # todo: delete when testing is finished
+            if part_commands[0].lower() == 'print-data':
+                return json.dumps(self.data)
+
             if part_commands[0].lower() == 'make-id':
                 return self.make_id(part_commands[1], date)
 
@@ -204,12 +240,13 @@ class FeelingsCheckinBot(object):
             if part_commands[0].lower() == 'will-not-attend':
                 return self.mark_attendance(part_commands[1], False, date)
 
-            if part_commands[0].lower() == 'subscribe':
+            if part_commands[0].lower() in ['subscribe', 'unsubscribe']:
+                bool = part_commands[0].lower() == 'subscribe'
                 if len(part_commands) == 1:
                     notifications = ['9', '2', '3']
                 else:
                     notifications = part_commands[1:]
-                return self.subscribe_user(notifications, user)
+                return self.manage_subscriptions(notifications, user, bool)
 
         except IndexError:
             return "Looks like you didn't give me enough arguments."
@@ -252,7 +289,8 @@ class FeelingsCheckinBot(object):
 
     @property
     def before_fc_on_Thursday(self):
-        if self.time['day'] == 3 and 8 < self.time['hour'] < 16:
+        # todo: replace this line when testing is finished: if self.time['day'] == 3 and 8 < self.time['hour'] < 16:
+        if self.time['day'] == 3 and 8 < self.time['hour'] < 18:
             return True
         else:
             return False
@@ -277,7 +315,7 @@ class FeelingsCheckinBot(object):
 
     def manage_subscriptions(self, notifications, user, sub=True):
         ret_str = ''
-        changed_notifs = []
+        changed_notifications = []
         for notification in notifications:
             if notification == '9':
                 tod = 'am'
@@ -287,15 +325,20 @@ class FeelingsCheckinBot(object):
                 return "{} isn't in the list of notifications I understand. Type `list-commands` for more information " \
                        "and try again!".format(notification)
             if sub:
-                ret_string, changed_notifications = self.sub_proc(user, notification, tod, ret_str, changed_notifs)
+                ret_str, changed_notifications = self.sub_proc(user, notification, tod, ret_str, changed_notifications)
             else:
-                ret_string, changed_notifications = self.unsub_proc(user, notification, tod, ret_str, changed_notifs)
-            self.put_data(self.data)
-            ret_str += "I updated your subscription for these notifications: {}".format(' '.join(changed_notifications))
+                ret_str, changed_notifications = self.unsub_proc(user, notification, tod, ret_str, changed_notifications)
+
+        self.put_data(self.data)
+        if changed_notifications:
+            ret_str+= "I updated your subscription for these notifications: {}".format(' '.join(changed_notifications))
+        return ret_str
 
     def sub_proc(self, user, notification, tod, ret_str, changed_notifications):
         if user in self.data['subscriptions'][notification]:
+            print("before", ret_str)
             ret_str += "You're already subscribed to a notification for {}{}. ".format(notification, tod)
+            print("after", ret_str)
         else:
             changed_notifications.append(notification + tod)
             self.data['subscriptions'][notification].append(user)
@@ -305,7 +348,7 @@ class FeelingsCheckinBot(object):
         if user not in self.data['subscriptions'][notification]:
             ret_str += "You're not subscribed to a notification for {}{}. ".format(notification, tod)
         else:
-            changed_notifications.append(user)
+            changed_notifications.append(notification + tod)
             self.data['subscriptions'][notification].remove(user)
         return ret_str, changed_notifications
 
